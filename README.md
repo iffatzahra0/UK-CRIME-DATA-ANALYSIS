@@ -1,4 +1,4 @@
-# UK Crime Data Analysis (Machine Learning)
+# UK Crime Data Analysis
 
 ## Overview
 This project performs multi-class classification on UK crime data using machine learning techniques. The goal is to predict crime types based on spatial and temporal features. The workflow includes data preprocessing, feature engineering, class balancing, model training, and performance evaluation.
