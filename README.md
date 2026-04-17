@@ -100,13 +100,7 @@ The project generates:
 - ROC curves
 - Precision-recall curves
 - Bias-variance analysis
-
-## Files Generated
-- `performance_metrics.csv`
-- `analysis_summary.txt`
-- Visualization images (`.png`)
-- `uk_crime_analysis_results.zip`
-
+# view zip file for all outputs
 ## Technologies Used
 - Python
 - Pandas, NumPy
@@ -114,8 +108,4 @@ The project generates:
 - Imbalanced-learn (SMOTE)
 - Matplotlib, Seaborn
 
-## How to Run
-
-1. Install dependencies:
-```bash
-pip install pandas numpy matplotlib seaborn scikit-learn imbalanced-learn kagglehub
+# made using google collab
