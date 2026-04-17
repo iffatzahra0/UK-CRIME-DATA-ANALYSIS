@@ -1,0 +1,877 @@
+# ============================================================================
+# UK CRIME DATA ANALYSIS (2022-2023) 
+# Multi-class Classification 
+# ============================================================================
+
+# ============================================================================
+# SECTION 1: INSTALLING AND IMPORTING REQUIRED LIBRARIES
+# ============================================================================
+
+print("="*80)
+print("UK CRIME DATA ANALYSIS - HIGH ACCURACY VERSION")
+print("="*80)
+
+#since the data is unbalanced so we are installing this library
+!pip install -q kagglehub imbalanced-learn
+
+# Importing all necessary libraries
+import pandas as pd #for data manipulation and analysis 
+import numpy as np #for numerical  computation import /*large arrays/*
+import matplotlib.pyplot as plt #for visiualization
+import seaborn as sns #for graphs
+import warnings #for ignoring unneccsary warnings (e.g  using a libray function that  is going to be removed/replaced)
+warnings.filterwarnings('ignore')
+
+# For preprocessing
+from sklearn.preprocessing import LabelEncoder, StandardScaler #conversion of non numeric to numeric data values,Standardizes features (for new centoriods)
+from sklearn.model_selection import train_test_split, cross_val_score #splitting data ,for cross validation of data
+from sklearn.decomposition import PCA # for dimentionality reduction
+from imblearn.over_sampling import SMOTE # Synthetic Minority Over-sampling Technique handles imbalanced datset 
+
+# For modeling - ONLY COURSE ALGORITHMS
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.cluster import KMeans
+
+# For evaluation
+from sklearn.metrics import (classification_report, confusion_matrix,
+                             accuracy_score, precision_score, recall_score,
+                             f1_score, roc_curve, auc, precision_recall_curve,
+                             average_precision_score)
+from sklearn.preprocessing import label_binarize
+
+# Set visualization style
+plt.style.use('seaborn-v0_8-darkgrid')
+sns.set_palette("husl")
+
+print("\n✅ All libraries imported successfully!")
+print("="*80)
+
+# ============================================================================
+# SECTION 2: LOADING  DATASET FROM KAGGLE
+# ============================================================================
+
+import kagglehub
+import glob
+import os
+
+print("\n" + "="*80)
+print("LOADING DATASET FROM KAGGLE")
+print("="*80)
+
+print("\n📥 Downloading dataset...")
+path = kagglehub.dataset_download("mahiradev/uk-crime-data-octdec-2022")
+print(f"✅ Downloaded to: {path}")
+
+# Find CSV files
+csv_files = glob.glob(os.path.join(path, '**', '*.csv'), recursive=True) #list all the dataset files recursice checks inside folders 
+
+print(f"\n📁 Found {len(csv_files)} CSV file(s):")
+for i, file in enumerate(csv_files):
+    size_mb = os.path.getsize(file) / (1024 * 1024)
+    print(f"   {i+1}. {os.path.basename(file)} ({size_mb:.1f} MB)")  
+
+# Load the SMALLEST file for faster processing with good accuracy
+smallest_file = min(csv_files, key=os.path.getsize)
+print(f"\n📊 Loading: {os.path.basename(smallest_file)}")
+print("   (Using smallest file for optimal speed and accuracy balance)")
+
+df = pd.read_csv(smallest_file)
+print(f"✅ Loaded: {df.shape[0]:,} rows × {df.shape[1]} columns")
+
+# Sample if still too large
+SAMPLE_SIZE = 300000 #mini-batch
+if df.shape[0] > SAMPLE_SIZE:
+    print(f"\n📉 Sampling {SAMPLE_SIZE:,} rows for optimal performance...")
+    df = df.sample(n=SAMPLE_SIZE, random_state=42).reset_index(drop=True)
+    print(f"✅ Sample created: {df.shape[0]:,} rows")
+
+print(f"\n📋 Columns: {list(df.columns)}")  
+"""
+Column	          Meaning
+crime_id	        Unique record number
+crime_type	      Kis type ka crime
+month	            Crime kis month mein hua
+latitude	        Location (north–south)
+longitude	        Location (east–west)
+street_name	      Street ka naam
+outcome	          Police result
+force_id	        Kis police force ne handle kiya
+neighbourhood_id	Local policing area
+source_file      	File jahan se data aaya """
+print(f"💾 Memory usage: {df.memory_usage(deep=True).sum() / (1024**2):.1f} MB")
+
+# ============================================================================
+# SECTION 3: DATA CLEANING & PREPARATION 
+# ============================================================================
+
+print("\n" + "="*80)
+print("DATA CLEANING & PREPARATION")
+print("="*80)
+
+# Set target column
+target_column = 'crime_type'
+print(f"\n🎯 Target column: '{target_column}'")
+
+# -----------------
+# CONSOLIDATING CRIME TYPES 
+# -----------------
+print("\n🔧 Step 1: Consolidating Crime Types...")
+
+crime_counts = df[target_column].value_counts()
+print(f"   Original: {len(crime_counts)} unique crime types") 
+
+# Keep top 10 most common crimes 
+TOP_N_CRIMES = 10
+top_crimes = crime_counts.head(TOP_N_CRIMES).index.tolist()
+
+print(f"\n   Keeping top {TOP_N_CRIMES} crimes:")
+for i, crime in enumerate(top_crimes, 1):
+    print(f"      {i}. {crime}: {crime_counts[crime]:,} samples")
+
+# Group rare crimes as "other-crime"
+df['crime_type_clean'] = df[target_column].apply(
+    lambda x: x if x in top_crimes else 'other-crime'
+)
+
+# Update target
+target_column = 'crime_type_clean'
+new_counts = df[target_column].value_counts()
+print(f"\n   ✅ Consolidated to {len(new_counts)} crime types")
+
+# -----------------
+# REMOVING  NON-PREDICTIVE COLUMNS THAT DOESNOT HELP IN CLASSIFICATION
+# -----------------
+print("\n🔧 Step 2: Removing Non-Predictive Features...")
+
+# Remove ID and source columns ( that don't help in  prediction)
+cols_to_drop = ['crime_id', 'source_file', 'source_force', 'source_month']
+cols_to_drop = [col for col in cols_to_drop if col in df.columns]
+
+# Remove high-cardinality text columns (too many unique values) # street names 
+for col in df.columns:
+    if col != target_column and df[col].dtype == 'object':
+        unique_ratio = df[col].nunique() / len(df)
+        if unique_ratio > 0.5:  
+            if col not in cols_to_drop:
+                cols_to_drop.append(col)
+                print(f"   Dropping '{col}': {df[col].nunique():,} unique values ({unique_ratio:.1%} unique)")
+
+if cols_to_drop:
+    df = df.drop(columns=cols_to_drop)
+    print(f"\n   ✅ Dropped {len(cols_to_drop)} columns: {cols_to_drop}")
+
+# -----------------
+# DROPING  COLUMNS WITH TOO MANY MISSING VALUES
+# -----------------
+print("\n🔧 Step 3: Handling Missing Values...")
+
+missing_pct = (df.isnull().sum() / len(df)) * 100
+high_missing = missing_pct[missing_pct > 40].index.tolist()
+
+if high_missing and target_column not in high_missing:
+    print(f"   Dropping columns with >40% missing:")
+    for col in high_missing:
+        print(f"      - {col}: {missing_pct[col]:.1f}% missing")
+    df = df.drop(columns=high_missing)
+
+print(f"   ✅ Remaining columns: {df.shape[1]}")
+
+# -----------------
+#  FEATURE ENGINEERING (ADDING  USEFUL FEATURES)
+# -----------------
+print("\n🔧 Step 4: Feature Engineering...")
+
+# Extract month number from date 
+if 'month' in df.columns:
+    df['month_num'] = pd.to_datetime(df['month']).dt.month
+    df['quarter'] = pd.to_datetime(df['month']).dt.quarter
+    print("   ✅ Added: month_num, quarter")
+
+# Create location bins (discretize lat/lon)
+if 'latitude' in df.columns and 'longitude' in df.columns:
+    from sklearn.preprocessing import KBinsDiscretizer
+
+    # Remove rows with missing coordinates
+    df = df.dropna(subset=['latitude', 'longitude'])
+
+    binner_lat = KBinsDiscretizer(n_bins=20, encode='ordinal', strategy='quantile')
+    binner_lon = KBinsDiscretizer(n_bins=20, encode='ordinal', strategy='quantile')
+
+    df['lat_zone'] = binner_lat.fit_transform(df[['latitude']]).astype(int)
+    df['lon_zone'] = binner_lon.fit_transform(df[['longitude']]).astype(int)
+    df['location_zone'] = df['lat_zone'].astype(str) + '_' + df['lon_zone'].astype(str)
+
+    print("   ✅ Added: lat_zone, lon_zone, location_zone")
+
+print(f"\n   Final feature count: {df.shape[1]}")
+# ============================================================================
+# SECTION 4: EXPLORATORY DATA ANALYSIS
+# ============================================================================
+
+print("\n" + "="*80)
+print("EXPLORATORY DATA ANALYSIS")
+print("="*80)
+
+# Show final class distribution
+class_counts = df[target_column].value_counts()
+print(f"\n📊 Final Crime Type Distribution:")
+print(class_counts) #Going to display crime type and its records
+
+# VISUALIZATION 1: Class Distribution
+plt.figure(figsize=(14, 6))
+class_counts.plot(kind='bar', color='steelblue', edgecolor='black', alpha=0.8)
+plt.title('Crime Type Distribution (Cleaned)', fontsize=16, fontweight='bold', pad=20)
+plt.xlabel('Crime Type', fontsize=13, fontweight='bold')
+plt.ylabel('Frequency', fontsize=13, fontweight='bold')
+plt.xticks(rotation=45, ha='right')
+plt.grid(axis='y', alpha=0.3)
+plt.tight_layout()
+plt.savefig('1_class_distribution.png', dpi=300, bbox_inches='tight')
+plt.show()
+print("✅ Saved: 1_class_distribution.png")
+
+# VISUALIZATION 2: Pie Chart
+plt.figure(figsize=(10, 8))
+colors = plt.cm.Set3(range(len(class_counts)))
+plt.pie(class_counts.values, labels=class_counts.index, autopct='%1.1f%%',
+        startangle=90, colors=colors, textprops={'fontsize': 10})
+plt.title('Crime Type Distribution', fontsize=16, fontweight='bold', pad=20)
+plt.tight_layout()
+plt.savefig('2_crime_pie_chart.png', dpi=300, bbox_inches='tight')
+plt.show()
+print("✅ Saved: 2_crime_pie_chart.png")
+
+# ============================================================================
+# SECTION 5: DATA PREPROCESSING
+# ============================================================================
+
+print("\n" + "="*80)
+print("DATA PREPROCESSING")
+print("="*80)
+
+# Separate features(input) and target(output "crime_type")
+X = df.drop(columns=[target_column])
+y = df[target_column]
+
+print(f"\n📊 Features shape: {X.shape}")
+print(f"📊 Target shape: {y.shape}")
+
+# STEP 1: Encode target variable (converting into numbers )
+print("\n🔧 Step 1: Encoding Target Variable...")
+label_encoder_target = LabelEncoder()
+y_encoded = label_encoder_target.fit_transform(y)
+print(f"   Classes encoded: {len(label_encoder_target.classes_)}")
+print(f"   Class mapping: {dict(enumerate(label_encoder_target.classes_))}")
+
+# STEP 2: Handle remaining missing values
+print("\n🔧 Step 2: Handling Remaining Missing Values...")
+numerical_cols = X.select_dtypes(include=[np.number]).columns
+categorical_cols = X.select_dtypes(include=['object']).columns
+
+for col in numerical_cols:
+    if X[col].isnull().sum() > 0:
+        X[col].fillna(X[col].median(), inplace=True) #using median
+
+for col in categorical_cols:
+    if X[col].isnull().sum() > 0:
+        X[col].fillna(X[col].mode()[0], inplace=True) # using mode (frequent values)
+
+print(f"   ✅ Missing values handled")
+
+# STEP 3: Encode categorical features (new features ko label krna )
+print("\n🔧 Step 3: Encoding Categorical Features...")
+label_encoders = {}
+for col in categorical_cols:
+    label_encoders[col] = LabelEncoder()
+    X[col] = label_encoders[col].fit_transform(X[col].astype(str))
+print(f"   ✅ Encoded {len(label_encoders)} categorical features")
+
+# STEP 4: Feature Scaling ()
+print("\n🔧 Step 4: Feature Scaling (StandardScaler)...")
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+X_scaled = pd.DataFrame(X_scaled, columns=X.columns)
+print("   ✅ Features scaled")
+
+# Visualization: Scaling effect
+if len(numerical_cols) > 0:
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    sample_col = numerical_cols[0]
+
+    axes[0].hist(X[sample_col], bins=30, color='coral', edgecolor='black', alpha=0.7)
+    axes[0].set_title(f'Before Scaling: {sample_col}', fontsize=12, fontweight='bold')
+    axes[0].set_xlabel('Value')
+    axes[0].set_ylabel('Frequency')
+
+    axes[1].hist(X_scaled[sample_col], bins=30, color='teal', edgecolor='black', alpha=0.7)
+    axes[1].set_title(f'After Scaling: {sample_col}', fontsize=12, fontweight='bold')
+    axes[1].set_xlabel('Standardized Value')
+    axes[1].set_ylabel('Frequency')
+
+    plt.suptitle('Effect of Standardization', fontsize=14, fontweight='bold')
+    plt.tight_layout()
+    plt.savefig('3_scaling_effect.png', dpi=300, bbox_inches='tight')
+    plt.show()
+    print("✅ Saved: 3_scaling_effect.png")
+
+# STEP 5: Train-Test Split
+print("\n🔧 Step 5: Train-Test Split...")
+X_train, X_test, y_train, y_test = train_test_split(
+    X_scaled, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded
+)
+print(f"   Training: {X_train.shape[0]:,} samples ({(len(X_train)/len(X_scaled)*100):.0f}%)")
+print(f"   Testing: {X_test.shape[0]:,} samples ({(len(X_test)/len(X_scaled)*100):.0f}%)")
+
+# STEP 6: SMOTE (Handle Class Imbalance)
+print("\n🔧 Step 6: Applying SMOTE...")
+print("   Class distribution before SMOTE:")
+unique, counts = np.unique(y_train, return_counts=True)
+for u, c in zip(unique, counts):
+    crime_name = label_encoder_target.classes_[u]
+    print(f"      {crime_name}: {c:,} samples")
+
+smote = SMOTE(random_state=42, k_neighbors=5)
+X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
+
+print(f"\n   Class distribution after SMOTE:")
+unique, counts = np.unique(y_train_balanced, return_counts=True)
+for u, c in zip(unique, counts):
+    crime_name = label_encoder_target.classes_[u]
+    print(f"      {crime_name}: {c:,} samples")
+
+print(f"\n   ✅ Balanced: {X_train.shape[0]:,} → {X_train_balanced.shape[0]:,} samples")
+
+# Visualization: SMOTE effect
+fig, axes = plt.subplots(1, 2, figsize=(15, 5))
+
+unique_before, counts_before = np.unique(y_train, return_counts=True)
+axes[0].bar(unique_before, counts_before, color='salmon', edgecolor='black')
+axes[0].set_title('Before SMOTE (Imbalanced)', fontsize=13, fontweight='bold')
+axes[0].set_xlabel('Class')
+axes[0].set_ylabel('Frequency')
+
+unique_after, counts_after = np.unique(y_train_balanced, return_counts=True)
+axes[1].bar(unique_after, counts_after, color='lightgreen', edgecolor='black')
+axes[1].set_title('After SMOTE (Balanced)', fontsize=13, fontweight='bold')
+axes[1].set_xlabel('Class')
+axes[1].set_ylabel('Frequency')
+
+plt.suptitle('SMOTE: Balancing Class Distribution', fontsize=15, fontweight='bold')
+plt.tight_layout()
+plt.savefig('4_smote_effect.png', dpi=300, bbox_inches='tight')
+plt.show()
+print("✅ Saved: 4_smote_effect.png")
+# ============================================================================
+# SECTION 6: DIMENSIONALITY REDUCTION (PCA)
+# ============================================================================
+
+print("\n" + "="*80)
+print("DIMENSIONALITY REDUCTION - PCA")
+print("="*80)
+
+pca = PCA(n_components=2)
+X_train_pca = pca.fit_transform(X_train_balanced)
+X_test_pca = pca.transform(X_test)
+
+variance_explained = sum(pca.explained_variance_ratio_) * 100
+print(f"\n✅ PCA: {X_train_balanced.shape[1]} → 2 dimensions")
+print(f"   Variance explained: {variance_explained:.2f}%")
+print(f"   Component 1: {pca.explained_variance_ratio_[0]*100:.2f}%")
+print(f"   Component 2: {pca.explained_variance_ratio_[1]*100:.2f}%")
+
+# Visualization: PCA
+plt.figure(figsize=(12, 8))
+scatter = plt.scatter(X_train_pca[:, 0], X_train_pca[:, 1],
+                     c=y_train_balanced, cmap='tab10', alpha=0.6, s=30, edgecolors='black')
+plt.colorbar(scatter, label='Crime Class')
+plt.xlabel(f'PC1 ({pca.explained_variance_ratio_[0]*100:.1f}% var)', fontsize=12, fontweight='bold')
+plt.ylabel(f'PC2 ({pca.explained_variance_ratio_[1]*100:.1f}% var)', fontsize=12, fontweight='bold')
+plt.title('PCA: Data Visualization in 2D', fontsize=15, fontweight='bold')
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig('5_pca_visualization.png', dpi=300, bbox_inches='tight')
+plt.show()
+print("✅ Saved: 5_pca_visualization.png")
+
+# ============================================================================
+# SECTION 7: K-MEANS CLUSTERING (Unsupervised Learning)
+# ============================================================================
+
+print("\n" + "="*80)
+print("K-MEANS CLUSTERING")
+print("="*80)
+
+# Elbow method
+print("\n📊 Finding optimal K using Elbow Method...")
+inertias = []
+K_range = range(2, min(15, len(np.unique(y_encoded)) + 3))
+
+for k in K_range:
+    kmeans_temp = KMeans(n_clusters=k, random_state=42, n_init=10)
+    kmeans_temp.fit(X_train_pca)
+    inertias.append(kmeans_temp.inertia_)
+
+# Elbow curve
+plt.figure(figsize=(10, 6))
+plt.plot(K_range, inertias, 'bo-', linewidth=2, markersize=8)
+plt.xlabel('Number of Clusters (K)', fontsize=12, fontweight='bold')
+plt.ylabel('Inertia', fontsize=12, fontweight='bold')
+plt.title('Elbow Method for Optimal K', fontsize=14, fontweight='bold')
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig('6_kmeans_elbow.png', dpi=300, bbox_inches='tight')
+plt.show()
+print("✅ Saved: 6_kmeans_elbow.png")
+
+# Apply K-Means
+n_clusters = len(np.unique(y_encoded))
+kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+cluster_labels = kmeans.fit_predict(X_train_pca)
+print(f"\n✅ K-Means with K={n_clusters} clusters")
+
+# Visualization: Clusters
+plt.figure(figsize=(12, 8))
+scatter = plt.scatter(X_train_pca[:, 0], X_train_pca[:, 1],
+                     c=cluster_labels, cmap='tab10', alpha=0.6, s=30, edgecolors='black')
+plt.scatter(kmeans.cluster_centers_[:, 0], kmeans.cluster_centers_[:, 1],
+           c='red', marker='X', s=300, edgecolors='black', linewidths=2, label='Centroids')
+plt.colorbar(scatter, label='Cluster')
+plt.xlabel('PC1', fontsize=12, fontweight='bold')
+plt.ylabel('PC2', fontsize=12, fontweight='bold')
+plt.title('K-Means Clustering Result', fontsize=15, fontweight='bold')
+plt.legend()
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig('7_kmeans_clusters.png', dpi=300, bbox_inches='tight')
+plt.show()
+print("✅ Saved: 7_kmeans_clusters.png")
+
+# ============================================================================
+# SECTION 8: MODEL TRAINING (IMPROVED HYPERPARAMETERS)
+# ============================================================================
+
+print("\n" + "="*80)
+print("SUPERVISED LEARNING: MODEL TRAINING")
+print("="*80)
+
+models_results = {}
+
+# MODEL 1: K-Nearest Neighbors (OPTIMIZED)
+print("\n" + "-"*80)
+print("MODEL 1: K-NEAREST NEIGHBORS (KNN)")
+print("-"*80)
+print("Hyperparameters:")
+print("   - n_neighbors: 7 (optimal for multi-class)")
+print("   - weights: 'distance' (closer neighbors more influential)")
+print("   - metric: 'manhattan' (works better for high-dim data)")
+
+knn_model = KNeighborsClassifier(n_neighbors=7, weights='distance', metric='manhattan')
+knn_model.fit(X_train_balanced, y_train_balanced)
+knn_pred = knn_model.predict(X_test)
+knn_proba = knn_model.predict_proba(X_test)
+
+models_results['K-Nearest Neighbors'] = {
+    'model': knn_model,
+    'predictions': knn_pred,
+    'probabilities': knn_proba,
+    'hyperparameters': {'n_neighbors': 7, 'weights': 'distance', 'metric': 'manhattan'}
+}
+print("✅ KNN trained")
+
+# MODEL 2: Logistic Regression (OPTIMIZED)
+print("\n" + "-"*80)
+print("MODEL 2: LOGISTIC REGRESSION")
+print("-"*80)
+print("Hyperparameters:")
+print("   - C: 10 (less regularization for complex data)")
+print("   - max_iter: 2000 (more iterations for convergence)")
+print("   - solver: 'saga' (handles large datasets well)")
+
+lr_model = LogisticRegression(C=10, max_iter=2000, solver='saga',
+                               multi_class='multinomial', random_state=42, n_jobs=-1)
+lr_model.fit(X_train_balanced, y_train_balanced)
+lr_pred = lr_model.predict(X_test)
+lr_proba = lr_model.predict_proba(X_test)
+
+models_results['Logistic Regression'] = {
+    'model': lr_model,
+    'predictions': lr_pred,
+    'probabilities': lr_proba,
+    'hyperparameters': {'C': 10, 'max_iter': 2000, 'solver': 'saga'}
+}
+print("✅ Logistic Regression trained")
+
+# MODEL 3: Logistic Regression with L2 
+print("\n" + "-"*80)
+print("MODEL 3: LOGISTIC REGRESSION (L2 REGULARIZATION)")
+print("-"*80)
+print("Hyperparameters:")
+print("   - C: 1.0 (moderate regularization)")
+print("   - penalty: 'l2' (Ridge)")
+
+lr_l2_model = LogisticRegression(C=1.0, penalty='l2', max_iter=2000, solver='saga',
+                                 multi_class='multinomial', random_state=42, n_jobs=-1)
+lr_l2_model.fit(X_train_balanced, y_train_balanced)
+lr_l2_pred = lr_l2_model.predict(X_test)
+lr_l2_proba = lr_l2_model.predict_proba(X_test)
+
+models_results['Logistic Regression (L2)'] = {
+    'model': lr_l2_model,
+    'predictions': lr_l2_pred,
+    'probabilities': lr_l2_proba,
+    'hyperparameters': {'C': 1.0, 'penalty': 'l2', 'max_iter': 2000}
+}
+print("✅ Logistic Regression (L2) trained")
+
+# MODEL 4: Logistic Regression with L1 
+print("\n" + "-"*80)
+print("MODEL 4: LOGISTIC REGRESSION (L1 REGULARIZATION)")
+print("-"*80)
+print("Hyperparameters:")
+print("   - C: 1.0 (moderate regularization)")
+print("   - penalty: 'l1' (Lasso)")
+
+lr_l1_model = LogisticRegression(C=1.0, penalty='l1', max_iter=2000, solver='saga',
+                                 multi_class='multinomial', random_state=42, n_jobs=-1)
+lr_l1_model.fit(X_train_balanced, y_train_balanced)
+lr_l1_pred = lr_l1_model.predict(X_test)
+lr_l1_proba = lr_l1_model.predict_proba(X_test)
+
+models_results['Logistic Regression (L1)'] = {
+    'model': lr_l1_model,
+    'predictions': lr_l1_pred,
+    'probabilities': lr_l1_proba,
+    'hyperparameters': {'C': 1.0, 'penalty': 'l1', 'max_iter': 2000}
+}
+print("✅ Logistic Regression (L1) trained")
+
+print("\n" + "="*80)
+print(f"✅ ALL {len(models_results)} MODELS TRAINED")
+print("="*80)
+
+# ============================================================================
+# SECTION 9: MODEL EVALUATION
+# ============================================================================
+
+print("\n" + "="*80)
+print("MODEL EVALUATION & PERFORMANCE METRICS")
+print("="*80)
+
+performance_data = []
+
+print("\n📊 Computing metrics...\n")
+
+for model_name, model_info in models_results.items():
+    predictions = model_info['predictions']
+
+    accuracy = accuracy_score(y_test, predictions)
+    precision = precision_score(y_test, predictions, average='weighted', zero_division=0)
+    recall = recall_score(y_test, predictions, average='weighted', zero_division=0)
+    f1 = f1_score(y_test, predictions, average='weighted', zero_division=0)
+
+    performance_data.append({
+        'Model': model_name,
+        'Accuracy': accuracy,
+        'Precision': precision,
+        'Recall': recall,
+        'F1-Score': f1
+    })
+
+    print(f"{model_name}:")
+    print(f"   Accuracy:  {accuracy:.4f} ({accuracy*100:.2f}%)")
+    print(f"   Precision: {precision:.4f}")
+    print(f"   Recall:    {recall:.4f}")
+    print(f"   F1-Score:  {f1:.4f}\n")
+
+performance_df = pd.DataFrame(performance_data)
+
+print("="*80)
+print("PERFORMANCE SUMMARY TABLE")
+print("="*80)
+print(performance_df.to_string(index=False))
+print("="*80)
+
+# Visualization: Performance comparison
+fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+metrics = ['Accuracy', 'Precision', 'Recall', 'F1-Score']
+colors = ['#3498db', '#e74c3c', '#2ecc71', '#f39c12']
+
+for idx, metric in enumerate(metrics):
+    ax = axes[idx // 2, idx % 2]
+    bars = ax.bar(range(len(performance_df)), performance_df[metric],
+                  color=colors[idx], edgecolor='black', alpha=0.8)
+    ax.set_title(f'{metric} Comparison', fontsize=14, fontweight='bold')
+    ax.set_xlabel('Model', fontsize=12)
+    ax.set_ylabel(metric, fontsize=12)
+    ax.set_ylim([0, 1.05])
+    ax.set_xticks(range(len(performance_df)))
+    ax.set_xticklabels(performance_df['Model'], rotation=45, ha='right')
+    ax.grid(axis='y', alpha=0.3)
+
+    for i, (bar, v) in enumerate(zip(bars, performance_df[metric])):
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                f'{v:.3f}', ha='center', va='bottom', fontsize=10, fontweight='bold')
+
+plt.suptitle('Performance Metrics - All Models', fontsize=16, fontweight='bold')
+plt.tight_layout()
+plt.savefig('8_performance_comparison.png', dpi=300, bbox_inches='tight')
+plt.show()
+print("\n✅ Saved: 8_performance_comparison.png")
+
+# ============================================================================
+# SECTION 10: CONFUSION MATRICES
+# ============================================================================
+
+print("\n" + "="*80)
+print("CONFUSION MATRICES")
+print("="*80)
+
+fig, axes = plt.subplots(2, 2, figsize=(16, 14))
+axes = axes.ravel()
+
+for idx, (model_name, model_info) in enumerate(models_results.items()):
+    cm = confusion_matrix(y_test, model_info['predictions'])
+
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=axes[idx],
+                cbar=True, square=True, linewidths=0.5)
+    axes[idx].set_title(f'{model_name}', fontsize=13, fontweight='bold')
+    axes[idx].set_xlabel('Predicted', fontsize=11, fontweight='bold')
+    axes[idx].set_ylabel('Actual', fontsize=11, fontweight='bold')
+
+plt.suptitle('Confusion Matrices', fontsize=16, fontweight='bold')
+plt.tight_layout()
+plt.savefig('9_confusion_matrices.png', dpi=300, bbox_inches='tight')
+plt.show()
+print("✅ Saved: 9_confusion_matrices.png")
+# ============================================================================
+# SECTION 11: ROC CURVES & AUC
+# ============================================================================
+
+print("\n" + "="*80)
+print("ROC CURVES & AUC SCORES")
+print("="*80)
+
+n_classes = len(np.unique(y_encoded))
+y_test_bin = label_binarize(y_test, classes=range(n_classes))
+
+plt.figure(figsize=(12, 8))
+
+for model_name, model_info in models_results.items():
+    y_score = model_info['probabilities']
+
+    fpr_micro, tpr_micro, _ = roc_curve(y_test_bin.ravel(), y_score.ravel())
+    roc_auc_micro = auc(fpr_micro, tpr_micro)
+
+    plt.plot(fpr_micro, tpr_micro, label=f'{model_name} (AUC={roc_auc_micro:.3f})', linewidth=2.5)
+    print(f"{model_name:30s} AUC = {roc_auc_micro:.4f}")
+
+plt.plot([0, 1], [0, 1], 'k--', linewidth=2, label='Random (AUC=0.5)')
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel('False Positive Rate', fontsize=13, fontweight='bold')
+plt.ylabel('True Positive Rate', fontsize=13, fontweight='bold')
+plt.title('ROC Curves - Multi-class Classification', fontsize=15, fontweight='bold')
+plt.legend(loc="lower right", fontsize=11)
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig('10_roc_curves.png', dpi=300, bbox_inches='tight')
+plt.show()
+print("\n✅ Saved: 10_roc_curves.png")
+
+# ============================================================================
+# SECTION 12: PRECISION-RECALL CURVES
+# ============================================================================
+
+print("\n" + "="*80)
+print("PRECISION-RECALL CURVES")
+print("="*80)
+
+plt.figure(figsize=(12, 8))
+
+for model_name, model_info in models_results.items():
+    y_score = model_info['probabilities']
+
+    precision_micro, recall_micro, _ = precision_recall_curve(y_test_bin.ravel(), y_score.ravel())
+    ap_micro = average_precision_score(y_test_bin, y_score, average='micro')
+
+    plt.plot(recall_micro, precision_micro, label=f'{model_name} (AP={ap_micro:.3f})', linewidth=2.5)
+    print(f"{model_name:30s} AP = {ap_micro:.4f}")
+
+plt.xlabel('Recall', fontsize=13, fontweight='bold')
+plt.ylabel('Precision', fontsize=13, fontweight='bold')
+plt.title('Precision-Recall Curves', fontsize=15, fontweight='bold')
+plt.legend(loc="best", fontsize=11)
+plt.grid(alpha=0.3)
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.tight_layout()
+plt.savefig('11_precision_recall.png', dpi=300, bbox_inches='tight')
+plt.show()
+print("\n✅ Saved: 11_precision_recall.png")
+
+# ============================================================================
+# SECTION 13: BIAS-VARIANCE TRADEOFF
+# ============================================================================
+
+print("\n" + "="*80)
+print("BIAS-VARIANCE TRADEOFF ANALYSIS")
+print("="*80)
+
+train_scores = []
+test_scores = []
+
+for model_name, model_info in models_results.items():
+    model = model_info['model']
+
+    train_pred = model.predict(X_train_balanced)
+    train_acc = accuracy_score(y_train_balanced, train_pred)
+    train_scores.append(train_acc)
+
+    test_acc = accuracy_score(y_test, model_info['predictions'])
+    test_scores.append(test_acc)
+
+    gap = train_acc - test_acc
+    print(f"{model_name:30s} Train: {train_acc:.4f}, Test: {test_acc:.4f}, Gap: {gap:.4f}")
+
+fig, ax = plt.subplots(figsize=(14, 8))
+x = np.arange(len(models_results))
+width = 0.35
+
+bars1 = ax.bar(x - width/2, train_scores, width, label='Training', color='skyblue', edgecolor='black', alpha=0.8)
+bars2 = ax.bar(x + width/2, test_scores, width, label='Testing', color='coral', edgecolor='black', alpha=0.8)
+
+ax.set_xlabel('Model', fontsize=13, fontweight='bold')
+ax.set_ylabel('Accuracy', fontsize=13, fontweight='bold')
+ax.set_title('Bias-Variance Tradeoff', fontsize=15, fontweight='bold')
+ax.set_xticks(x)
+ax.set_xticklabels(list(models_results.keys()), rotation=45, ha='right')
+ax.legend(fontsize=12)
+ax.grid(axis='y', alpha=0.3)
+ax.set_ylim([0, 1.05])
+
+for bars in [bars1, bars2]:
+    for bar in bars:
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                f'{height:.3f}', ha='center', va='bottom', fontsize=9)
+
+plt.tight_layout()
+plt.savefig('12_bias_variance.png', dpi=300, bbox_inches='tight')
+plt.show()
+print("\n✅ Saved: 12_bias_variance.png")
+
+# ============================================================================
+# SECTION 14: CLASSIFICATION REPORTS
+# ============================================================================
+
+print("\n" + "="*80)
+print("DETAILED CLASSIFICATION REPORTS")
+print("="*80)
+
+class_names = label_encoder_target.classes_
+
+for model_name, model_info in models_results.items():
+    print(f"\n{'='*80}")
+    print(f"Classification Report: {model_name}")
+    print('='*80)
+    report = classification_report(y_test, model_info['predictions'],
+                                   target_names=class_names, zero_division=0)
+    print(report)
+
+# ============================================================================
+# SECTION 15: FINAL SUMMARY & SAVE RESULTS
+# ============================================================================
+
+print("\n" + "="*80)
+print("FINAL SUMMARY")
+print("="*80)
+
+best_model_name = performance_df.loc[performance_df['F1-Score'].idxmax(), 'Model']
+best_f1 = performance_df['F1-Score'].max()
+best_accuracy = performance_df.loc[performance_df['F1-Score'].idxmax(), 'Accuracy']
+
+summary = f"""
+{'='*80}
+UK CRIME DATA ANALYSIS - FINAL RESULTS
+{'='*80}
+
+DATASET:
+  • Total samples: {df.shape[0]:,}
+  • Features: {X.shape[1]}
+  • Crime types: {len(label_encoder_target.classes_)}
+  • Training samples: {X_train_balanced.shape[0]:,}
+  • Testing samples: {X_test.shape[0]:,}
+
+BEST MODEL:
+  🏆 {best_model_name}
+  📊 Accuracy: {best_accuracy:.4f} ({best_accuracy*100:.2f}%)
+  📊 F1-Score: {best_f1:.4f}
+
+ALL MODELS:
+{performance_df.to_string(index=False)}
+
+PREPROCESSING:
+  ✓ Consolidated to top {TOP_N_CRIMES} crime types
+  ✓ Feature engineering (location zones, time features)
+  ✓ SMOTE balancing
+  ✓ StandardScaler normalization
+
+ALGORITHMS USED:
+  ✓ K-Nearest Neighbors
+  ✓ Logistic Regression (Gradient Descent)
+  ✓ L2 Regularization (Ridge)
+  ✓ L1 Regularization (Lasso)
+  ✓ K-Means Clustering
+  ✓ PCA Dimensionality Reduction
+
+{'='*80}
+"""
+
+print(summary)
+
+# Save results
+performance_df.to_csv('performance_metrics.csv', index=False)
+print("\n✅ Saved: performance_metrics.csv")
+
+with open('analysis_summary.txt', 'w') as f:
+    f.write(summary)
+print("✅ Saved: analysis_summary.txt")
+
+# Create ZIP file
+import zipfile
+
+zip_filename = 'uk_crime_analysis_results.zip'
+files_to_zip = [
+    '1_class_distribution.png',
+    '2_crime_pie_chart.png',
+    '3_scaling_effect.png',
+    '4_smote_effect.png',
+    '5_pca_visualization.png',
+    '6_kmeans_elbow.png',
+    '7_kmeans_clusters.png',
+    '8_performance_comparison.png',
+    '9_confusion_matrices.png',
+    '10_roc_curves.png',
+    '11_precision_recall.png',
+    '12_bias_variance.png',
+    'performance_metrics.csv',
+    'analysis_summary.txt'
+]
+
+print("\n📦 Creating results package...")
+with zipfile.ZipFile(zip_filename, 'w') as zipf:
+    for file in files_to_zip:
+        if os.path.exists(file):
+            zipf.write(file)
+            print(f"   ✓ {file}")
+
+print(f"\n✅ Results packaged: {zip_filename}")
+
+# Download
+from google.colab import files
+files.download(zip_filename)
+
+
+print("="*80)
