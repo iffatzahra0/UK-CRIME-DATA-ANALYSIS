@@ -109,3 +109,6 @@ The project generates:
 - Matplotlib, Seaborn
 
 ### made using google collab
+### Group Partners
+- [Haram Chishti](https://github.com/HaramChishti)
+- Ayesha Ghafoor
